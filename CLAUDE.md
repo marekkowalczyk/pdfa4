@@ -7,8 +7,9 @@ Normalizes PDF pages to A4 in place. Wrapper around `cpdf -scale-to-fit`.
 - Accepts one or more PDF files; `.` / `--all` / `-a` processes all `*.pdf` / `*.PDF` in the current directory
 - Errors if called with no arguments
 - Default: preserve each page's orientation (portrait → A4 portrait, landscape → A4 landscape; square → portrait)
+- `/Rotate` awareness: effective (displayed) size drives orientation and already-A4 checks; `cpdf -upright` runs before scaling when any page has non-zero rotation
 - `-p` / `--portrait` and `-l` / `--landscape` force a single orientation (mutually exclusive)
-- Leaves already-A4 files byte-identical (1 pt tolerance)
+- Leaves already-A4 files byte-identical (1 pt tolerance on effective size)
 - Writes `FILE.bak` before overwrite unless `--no-backup`
 - Warns and skips duplicate filenames
 
@@ -16,7 +17,7 @@ Normalizes PDF pages to A4 in place. Wrapper around `cpdf -scale-to-fit`.
 
 Single bash script: `pdfa4`. Symlinked from `/usr/local/bin/pdfa4` (`make install`; `PREFIX` overridable).
 
-Tests: `tests/pdfa4.bats` (mock `cpdf` backend). Run with `make test`.
+Tests: `tests/pdfa4.bats` (mock) + `tests/pdfa4-integration.bats` (real cpdf, skipped if missing). Run with `make test`.
 
 Pre-commit hook: `hooks/pre-commit`. Install with `make hooks`.
 
@@ -28,7 +29,8 @@ Pre-commit hook: `hooks/pre-commit`. Install with `make hooks`.
 ## Design decisions
 
 - **Fit, don't fill.** `cpdf -scale-to-fit` preserves aspect ratio and centers; white margins appear when the source aspect ratio differs from A4.
-- **Skip rewrite when already A4.** Avoids needless backup/churn for documents that are already correct.
+- **Skip rewrite when already A4.** Avoids needless backup/churn for documents that are already correct (including A4 MediaBox with `/Rotate` 90/270 — effective size is already A4).
+- **Upright before scale.** cpdf's `portrait`/`landscape` page ranges ignore `/Rotate`; we `-upright` first so ranges match what the user sees.
 - **Backup by default.** Unlike most siblings; opt out with `--no-backup`. Backup path is `FILE.bak` (replaced if present).
 - **Preserve mode uses cpdf page ranges** `portrait` / `landscape`, plus explicit page numbers for squares (cpdf treats equal width/height as neither).
 - Follows the Rule of Silence. `--dry-run` previews show by default; `-q` overrides everything but errors. Errors are prefixed `pdfa4:`.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.0.0"
+VERSION="1.1.0"
 
 # A4 in PDF points, matching cpdf's a4portrait / a4landscape
 A4_SHORT=595.276500
@@ -15,6 +15,9 @@ Normalize PDF pages to A4, scaling uniformly to fit and padding with white.
 
 By default each page keeps its orientation (portrait → A4 portrait,
 landscape → A4 landscape). Square pages are treated as portrait.
+Page /Rotate is respected: effective orientation uses the displayed
+size (90°/270° swap width and height). Non-zero rotation is normalized
+via cpdf -upright before scaling.
 
 Options:
   -p, --portrait   Force all pages to A4 portrait
@@ -134,28 +137,43 @@ is_a4_size() {
   fi
 }
 
-# Fill page_w[], page_h[], page_target[] from cpdf -page-info.
-# Uses CropBox when present (four numbers), else MediaBox — matching cpdf -scale-to-fit.
+# Fill page_w[], page_h[], page_rot[], page_target[] from cpdf -page-info.
+# Dimensions are *effective* (displayed): 90°/270° swap width and height.
+# Uses CropBox when present, else MediaBox — matching cpdf -scale-to-fit.
 parse_page_info() {
   local file=$1
-  local info
-  page_w=(); page_h=(); page_target=()
+  local info _w _h _rot ew eh
+  page_w=(); page_h=(); page_rot=(); page_target=()
   page_count=0
+  needs_upright=false
 
   info=$(cpdf -page-info "$file" 2>/dev/null) || return 1
 
-  # Emit "page w h" lines; prefer CropBox over MediaBox per page.
-  while read -r _w _h; do
+  while read -r _w _h _rot; do
     [[ -n "$_w" && -n "$_h" ]] || continue
-    page_w+=("$_w")
-    page_h+=("$_h")
+    _rot=${_rot:-0}
+
+    # Effective (displayed) size after /Rotate
+    if [[ "$_rot" == "90" || "$_rot" == "270" ]]; then
+      ew=$_h; eh=$_w
+    else
+      ew=$_w; eh=$_h
+    fi
+
+    page_w+=("$ew")
+    page_h+=("$eh")
+    page_rot+=("$_rot")
+    if [[ "$_rot" != "0" ]]; then
+      needs_upright=true
+    fi
+
     if [[ "$orientation" == portrait ]]; then
       page_target+=("portrait")
     elif [[ "$orientation" == landscape ]]; then
       page_target+=("landscape")
     else
-      # preserve: square → portrait
-      if approx_eq "$_w" "$_h" "$TOL" || awk -v w="$_w" -v h="$_h" 'BEGIN{exit !(w <= h)}'; then
+      # preserve: square → portrait (using effective size)
+      if approx_eq "$ew" "$eh" "$TOL" || awk -v w="$ew" -v h="$eh" 'BEGIN{exit !(w <= h)}'; then
         page_target+=("portrait")
       else
         page_target+=("landscape")
@@ -163,18 +181,19 @@ parse_page_info() {
     fi
     page_count=$((page_count + 1))
   done < <(awk '
-    /^Page / { if (have) print w, h; have=0; mw=""; mh=""; cw=""; ch="" }
+    /^Page / { if (have) print w, h, rot; have=0; mw=""; mh=""; cw=""; ch=""; rot=0 }
     /^MediaBox:/ {
       if (NF >= 5) { mw = $4 - $2; mh = $5 - $3 }
     }
     /^CropBox:/ {
       if (NF >= 5) { cw = $4 - $2; ch = $5 - $3 }
     }
+    /^Rotation:/ { rot = $2 + 0 }
     /^Annotations:/ {
       if (cw != "") { w = cw; h = ch } else { w = mw; h = mh }
       have = 1
     }
-    END { if (have) print w, h }
+    END { if (have) print w, h, rot }
   ' <<<"$info")
 
   [[ "$page_count" -gt 0 ]]
@@ -190,7 +209,8 @@ needs_normalize() {
   return 1
 }
 
-# Comma-separated 1-based page numbers that are square (neither portrait nor landscape for cpdf)
+# Comma-separated 1-based page numbers that are square in *effective* size
+# (cpdf portrait/landscape ranges ignore /Rotate and treat equal sides as neither).
 square_page_range() {
   local i nums=()
   for ((i = 0; i < page_count; i++)); do
@@ -201,8 +221,8 @@ square_page_range() {
   (IFS=,; echo "${nums[*]}")
 }
 
-# Normalize $1 into $2 via cpdf -scale-to-fit
-normalize_file() {
+# Scale an already-upright (or rotation-free) PDF into $2
+scale_to_a4() {
   local src=$1 dest=$2
   local mid squares portrait_range
 
@@ -215,7 +235,6 @@ normalize_file() {
     return $?
   fi
 
-  # preserve orientation: cpdf's portrait/landscape ranges, plus squares → portrait
   squares=$(square_page_range)
   if [[ -n "$squares" ]]; then
     portrait_range="portrait,$squares"
@@ -224,7 +243,6 @@ normalize_file() {
   fi
 
   mid=$(mktemp "${dest}.mid.XXXXXX") || return 1
-  # Empty ranges warn but leave the file intact (cpdf keeps all pages).
   if ! cpdf -scale-to-fit a4portrait "$src" "$portrait_range" -o "$mid" 2>/dev/null; then
     rm -f "$mid"; return 1
   fi
@@ -233,6 +251,30 @@ normalize_file() {
   fi
   rm -f "$mid"
   return 0
+}
+
+# Normalize $1 into $2. Uprights non-zero /Rotate first so cpdf ranges match display.
+normalize_file() {
+  local src=$1 dest=$2
+  local uprighted=""
+
+  if [[ "$needs_upright" == true ]]; then
+    uprighted=$(mktemp "${dest}.up.XXXXXX") || return 1
+    if ! cpdf -upright "$src" -o "$uprighted" 2>/dev/null || [[ ! -s "$uprighted" ]]; then
+      rm -f "$uprighted"; return 1
+    fi
+    # Re-classify from the upright file (Rotation 0, MediaBox matches display).
+    if ! parse_page_info "$uprighted"; then
+      rm -f "$uprighted"; return 1
+    fi
+    if ! scale_to_a4 "$uprighted" "$dest"; then
+      rm -f "$uprighted"; return 1
+    fi
+    rm -f "$uprighted"
+    return 0
+  fi
+
+  scale_to_a4 "$src" "$dest"
 }
 
 tmpfile=""

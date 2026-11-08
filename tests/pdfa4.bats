@@ -34,7 +34,9 @@ if [[ "$1" == "-page-info" ]]; then
     IFS=';' read -ra ents <<< "$pages"
     for ent in "${ents[@]}"; do
         n=$((n + 1))
-        IFS=',' read -r w h <<< "$ent"
+        # MOCK_PAGES entries: w,h or w,h,rot
+        IFS=',' read -r w h rot <<< "$ent"
+        rot=${rot:-0}
         cat <<PAGE
 Page $n:
 Label: 
@@ -43,14 +45,14 @@ CropBox:
 BleedBox: 
 TrimBox: 
 ArtBox: 
-Rotation: 0
+Rotation: $rot
 Annotations: 0
 PAGE
     done
     exit 0
 fi
 
-# Find -o output and input file (last non-flag arg before -o, or first .pdf-like)
+# Find -o output and input file
 output=""
 input=""
 args=("$@")
@@ -68,6 +70,13 @@ for a in "$@"; do
             ;;
     esac
 done
+
+if [[ "$*" == *"-upright"* ]]; then
+    case "${MOCK_UPRIGHT:-ok}" in
+        fail)  exit 1 ;;
+        *)     cp -- "$input" "$output"; exit 0 ;;
+    esac
+fi
 
 if [[ "$*" == *"-scale-to-fit"* ]]; then
     case "${MOCK_SCALE:-ok}" in
@@ -89,7 +98,7 @@ setup() {
     WORK="$BATS_TEST_TMPDIR/work"
     mkdir -p "$WORK"
     cd "$WORK"
-    unset MOCK_PAGES MOCK_SCALE
+    unset MOCK_PAGES MOCK_SCALE MOCK_UPRIGHT
     install_mock
 }
 
@@ -370,4 +379,39 @@ setup() {
     make_pdf a.pdf
     run "$SCRIPT" -n -q a.pdf
     [ -z "$output" ]
+}
+
+# ---------------------------------------------------------------------------
+# /Rotate awareness
+# ---------------------------------------------------------------------------
+
+@test "A4 portrait MediaBox with /Rotate 90 is already A4 (effective landscape)" {
+    # Box is A4P; rot 90 → displayed A4L → leave untouched, no backup
+    export MOCK_PAGES="${A4W},${A4H},90"
+    make_pdf a.pdf
+    cp a.pdf orig.pdf
+    run "$SCRIPT" -v a.pdf
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"already A4"* ]]
+    cmp a.pdf orig.pdf
+    [ ! -e a.pdf.bak ]
+}
+
+@test "US Letter with /Rotate 90 is normalized (effective landscape)" {
+    export MOCK_PAGES="612,792,90"
+    make_pdf a.pdf
+    run "$SCRIPT" -v --no-backup a.pdf
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"normalized"* ]]
+}
+
+@test "upright failure keeps original and exits 1" {
+    export MOCK_PAGES="612,792,90"
+    export MOCK_UPRIGHT=fail
+    make_pdf a.pdf
+    cp a.pdf orig.pdf
+    run "$SCRIPT" --no-backup a.pdf
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"failed to process"* ]]
+    cmp a.pdf orig.pdf
 }

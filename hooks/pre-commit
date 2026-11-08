@@ -2,4 +2,4 @@
 # Run the test suite before every commit.
 # Install with: bash hooks/install.sh
 
-exec bats tests/pdfa4.bats
+exec bats tests/pdfa4.bats tests/pdfa4-integration.bats

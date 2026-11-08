@@ -2,6 +2,21 @@
 
 Continuous improvement log. Each session ends with a brief review: what went well, what didn't, what to change. This is the POOGI (Process Of Ongoing Improvement) record for this project.
 
+## 2026-11-08 — /Rotate awareness + real-cpdf integration tests
+
+**What went well:**
+- Feature interview pruned a long list to two concrete items; shipped both in one pass.
+- `cpdf -upright` before `-scale-to-fit` fixes the known cpdf gap (portrait/landscape ranges ignore `/Rotate`).
+- Integration suite (5 tests) caught the intended behaviours against real cpdf; unit mocks cover upright failure.
+
+**What didn't go well:**
+- Nothing material this round.
+
+**What we'll do differently:**
+- When proposing a backend behaviour, verify cpdf's page-range semantics against `/Rotate` early — the manual documents it, and `-prerotate` / `-upright` exist for a reason.
+
+---
+
 ## 2026-11-08 — Initial pdfa4
 
 **What went well:**

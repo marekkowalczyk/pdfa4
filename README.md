@@ -17,7 +17,7 @@ pdfa4 -q .                     # quiet: no output unless there's an error
 pdfa4 -- -oddly-named.pdf      # use -- to pass filenames starting with -
 ```
 
-By default each page keeps its orientation (portrait → A4 portrait, landscape → A4 landscape). Square pages are treated as portrait. Files that are already A4 (within 1 pt) are left byte-identical. On overwrite, a `FILE.bak` backup is written unless `--no-backup` is given.
+By default each page keeps its orientation (portrait → A4 portrait, landscape → A4 landscape). Square pages are treated as portrait. Page `/Rotate` is respected for orientation and “already A4” checks (90°/270° swap width/height); non-zero rotation is uprighted via cpdf before scaling. Files that are already A4 in displayed size (within 1 pt) are left byte-identical. On overwrite, a `FILE.bak` backup is written unless `--no-backup` is given.
 
 `pdfa4` is silent on success by default (the Rule of Silence) — pass `-v` to see which files were normalized.
 
@@ -73,7 +73,7 @@ make hooks   # install the pre-commit hook (runs the test suite before every com
 make test    # run the bats suite
 ```
 
-Tests use a mock `cpdf` binary — no real PDFs required to run the suite.
+Unit tests use a mock `cpdf` binary. `tests/pdfa4-integration.bats` runs against a real `cpdf` and is skipped when it is missing.
 
 ## License
 

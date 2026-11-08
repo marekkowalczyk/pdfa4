@@ -10,7 +10,7 @@ uninstall:
 	rm -f "$(BINDIR)/pdfa4"
 
 test:
-	bats tests/pdfa4.bats
+	bats tests/pdfa4.bats tests/pdfa4-integration.bats
 
 hooks:
 	bash hooks/install.sh
