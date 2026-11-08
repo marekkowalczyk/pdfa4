@@ -1,0 +1,303 @@
+#!/usr/bin/env bash
+
+VERSION="1.0.0"
+
+# A4 in PDF points, matching cpdf's a4portrait / a4landscape
+A4_SHORT=595.276500
+A4_LONG=841.891050
+# Accept pages within this many points of exact A4
+TOL=1.0
+
+usage() {
+  cat << EOF
+Usage: ${0##*/} [OPTIONS] [-- ] [FILE... | . | --all]
+Normalize PDF pages to A4, scaling uniformly to fit and padding with white.
+
+By default each page keeps its orientation (portrait → A4 portrait,
+landscape → A4 landscape). Square pages are treated as portrait.
+
+Options:
+  -p, --portrait   Force all pages to A4 portrait
+  -l, --landscape  Force all pages to A4 landscape
+      --no-backup  Do not write FILE.bak before overwriting (default: backup)
+  -a, --all        Process all *.pdf / *.PDF files in the current directory
+  -n, --dry-run    Show what would be done without modifying files
+  -v, --verbose    Report each file as it's acted on (default: silent on success)
+  -q, --quiet      Suppress all non-error output, overriding --verbose
+  -h, --help       Display this help and exit
+  --version        Print version and exit
+
+Passing . is equivalent to --all.
+EOF
+  exit 0
+}
+
+# Defaults
+orientation=preserve   # preserve | portrait | landscape
+backup=true
+dry_run=false
+verbose=false
+quiet=false
+exit_status=0
+files=()
+all=false
+
+# Argument parsing
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -h|--help)    usage ;;
+    --version)
+      echo "pdfa4 $VERSION"
+      if command -v cpdf >/dev/null 2>&1; then
+        cpdf -version 2>&1 | head -1
+      else
+        echo "cpdf: not found" >&2
+      fi
+      exit 0 ;;
+    -p|--portrait)
+      if [[ "$orientation" == landscape ]]; then
+        echo "pdfa4: cannot combine --portrait and --landscape" >&2; exit 1
+      fi
+      orientation=portrait; shift ;;
+    -l|--landscape)
+      if [[ "$orientation" == portrait ]]; then
+        echo "pdfa4: cannot combine --portrait and --landscape" >&2; exit 1
+      fi
+      orientation=landscape; shift ;;
+    --no-backup)  backup=false; shift ;;
+    -n|--dry-run) dry_run=true; shift ;;
+    -v|--verbose) verbose=true; shift ;;
+    -q|--quiet)   quiet=true; shift ;;
+    -a|--all|.)   all=true; shift ;;
+    --)           shift; files+=("$@"); break ;;
+    -*)           echo "pdfa4: unknown option '$1'" >&2; exit 1 ;;
+    *)            files+=("$1"); shift ;;
+  esac
+done
+
+log() { [[ "$quiet" == false ]] && echo "$@"; }
+vlog() { [[ "$verbose" == true && "$quiet" == false ]] && echo "$@"; }
+
+if [[ "$all" == true && ${#files[@]} -gt 0 ]]; then
+  echo "pdfa4: cannot combine --all with explicit filenames" >&2; exit 1
+fi
+
+if [[ "$all" == true ]]; then
+  expanded=()
+  for f in *.pdf *.PDF; do
+    [[ -f "$f" ]] && expanded+=("$f")
+  done
+  if [[ ${#expanded[@]} -eq 0 ]]; then
+    echo "pdfa4: no PDF files found in current directory" >&2; exit 1
+  fi
+  files=("${expanded[@]}")
+fi
+
+if [[ ${#files[@]} -eq 0 ]]; then
+  echo "pdfa4: no files specified" >&2; exit 1
+fi
+
+command -v cpdf >/dev/null 2>&1 || { echo "pdfa4: cpdf: command not found" >&2; exit 1; }
+
+# Deduplicate, warning on repeats
+seen=()
+unique_files=()
+for f in "${files[@]}"; do
+  already=0
+  for s in "${seen[@]}"; do
+    [[ "$s" == "$f" ]] && already=1 && break
+  done
+  if [[ "$already" -eq 1 ]]; then
+    echo "pdfa4: '$f' specified more than once, skipping duplicate" >&2
+  else
+    seen+=("$f")
+    unique_files+=("$f")
+  fi
+done
+files=("${unique_files[@]}")
+
+# approx_eq a b tol — true if |a-b| <= tol
+approx_eq() {
+  awk -v a="$1" -v b="$2" -v t="$3" 'BEGIN {
+    d = a - b; if (d < 0) d = -d
+    exit !(d <= t)
+  }'
+}
+
+# is_a4_size w h target — target is portrait|landscape
+is_a4_size() {
+  local w=$1 h=$2 target=$3
+  if [[ "$target" == portrait ]]; then
+    approx_eq "$w" "$A4_SHORT" "$TOL" && approx_eq "$h" "$A4_LONG" "$TOL"
+  else
+    approx_eq "$w" "$A4_LONG" "$TOL" && approx_eq "$h" "$A4_SHORT" "$TOL"
+  fi
+}
+
+# Fill page_w[], page_h[], page_target[] from cpdf -page-info.
+# Uses CropBox when present (four numbers), else MediaBox — matching cpdf -scale-to-fit.
+parse_page_info() {
+  local file=$1
+  local info
+  page_w=(); page_h=(); page_target=()
+  page_count=0
+
+  info=$(cpdf -page-info "$file" 2>/dev/null) || return 1
+
+  # Emit "page w h" lines; prefer CropBox over MediaBox per page.
+  while read -r _w _h; do
+    [[ -n "$_w" && -n "$_h" ]] || continue
+    page_w+=("$_w")
+    page_h+=("$_h")
+    if [[ "$orientation" == portrait ]]; then
+      page_target+=("portrait")
+    elif [[ "$orientation" == landscape ]]; then
+      page_target+=("landscape")
+    else
+      # preserve: square → portrait
+      if approx_eq "$_w" "$_h" "$TOL" || awk -v w="$_w" -v h="$_h" 'BEGIN{exit !(w <= h)}'; then
+        page_target+=("portrait")
+      else
+        page_target+=("landscape")
+      fi
+    fi
+    page_count=$((page_count + 1))
+  done < <(awk '
+    /^Page / { if (have) print w, h; have=0; mw=""; mh=""; cw=""; ch="" }
+    /^MediaBox:/ {
+      if (NF >= 5) { mw = $4 - $2; mh = $5 - $3 }
+    }
+    /^CropBox:/ {
+      if (NF >= 5) { cw = $4 - $2; ch = $5 - $3 }
+    }
+    /^Annotations:/ {
+      if (cw != "") { w = cw; h = ch } else { w = mw; h = mh }
+      have = 1
+    }
+    END { if (have) print w, h }
+  ' <<<"$info")
+
+  [[ "$page_count" -gt 0 ]]
+}
+
+needs_normalize() {
+  local i
+  for ((i = 0; i < page_count; i++)); do
+    if ! is_a4_size "${page_w[$i]}" "${page_h[$i]}" "${page_target[$i]}"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Comma-separated 1-based page numbers that are square (neither portrait nor landscape for cpdf)
+square_page_range() {
+  local i nums=()
+  for ((i = 0; i < page_count; i++)); do
+    if approx_eq "${page_w[$i]}" "${page_h[$i]}" "$TOL"; then
+      nums+=("$((i + 1))")
+    fi
+  done
+  (IFS=,; echo "${nums[*]}")
+}
+
+# Normalize $1 into $2 via cpdf -scale-to-fit
+normalize_file() {
+  local src=$1 dest=$2
+  local mid squares portrait_range
+
+  if [[ "$orientation" == portrait ]]; then
+    cpdf -scale-to-fit a4portrait "$src" -o "$dest" 2>/dev/null
+    return $?
+  fi
+  if [[ "$orientation" == landscape ]]; then
+    cpdf -scale-to-fit a4landscape "$src" -o "$dest" 2>/dev/null
+    return $?
+  fi
+
+  # preserve orientation: cpdf's portrait/landscape ranges, plus squares → portrait
+  squares=$(square_page_range)
+  if [[ -n "$squares" ]]; then
+    portrait_range="portrait,$squares"
+  else
+    portrait_range="portrait"
+  fi
+
+  mid=$(mktemp "${dest}.mid.XXXXXX") || return 1
+  # Empty ranges warn but leave the file intact (cpdf keeps all pages).
+  if ! cpdf -scale-to-fit a4portrait "$src" "$portrait_range" -o "$mid" 2>/dev/null; then
+    rm -f "$mid"; return 1
+  fi
+  if ! cpdf -scale-to-fit a4landscape "$mid" landscape -o "$dest" 2>/dev/null; then
+    rm -f "$mid"; return 1
+  fi
+  rm -f "$mid"
+  return 0
+}
+
+tmpfile=""
+cleanup() { [[ -n "$tmpfile" ]] && rm -f "$tmpfile"; }
+trap cleanup INT TERM EXIT
+
+for file in "${files[@]}"; do
+  [[ "$file" == -* ]] && file="./$file"
+
+  if [[ ! -f "$file" ]]; then
+    echo "pdfa4: '$file' not found, skipping" >&2
+    exit_status=1
+    continue
+  fi
+
+  if ! parse_page_info "$file"; then
+    echo "pdfa4: failed to read page info for '$file'" >&2
+    exit_status=1
+    continue
+  fi
+
+  if ! needs_normalize; then
+    if [[ "$dry_run" == true ]]; then
+      log "$file: [dry-run] already A4, would leave untouched"
+    else
+      vlog "$file: already A4"
+    fi
+    continue
+  fi
+
+  if [[ "$dry_run" == true ]]; then
+    case "$orientation" in
+      portrait)  log "$file: [dry-run] would normalize to A4 portrait" ;;
+      landscape) log "$file: [dry-run] would normalize to A4 landscape" ;;
+      *)         log "$file: [dry-run] would normalize to A4 (preserve orientation)" ;;
+    esac
+    continue
+  fi
+
+  dir=$(dirname "$file")
+  tmpfile=$(mktemp "${dir}/.pdfa4.XXXXXX")
+
+  if ! normalize_file "$file" "$tmpfile" || [[ ! -s "$tmpfile" ]]; then
+    rm -f "$tmpfile"; tmpfile=""
+    echo "pdfa4: failed to process '$file'" >&2
+    exit_status=1
+    continue
+  fi
+
+  if [[ "$backup" == true ]]; then
+    if ! cp -p "$file" "${file}.bak" 2>/dev/null && ! cp "$file" "${file}.bak"; then
+      rm -f "$tmpfile"; tmpfile=""
+      echo "pdfa4: failed to create backup '${file}.bak'" >&2
+      exit_status=1
+      continue
+    fi
+  fi
+
+  chmod "$(stat -f%Mp%Lp "$file")" "$tmpfile"
+  while IFS= read -r attr; do
+    [[ -n "$attr" ]] && xattr -wx "$attr" "$(xattr -px "$attr" "$file")" "$tmpfile" 2>/dev/null
+  done < <(xattr "$file" 2>/dev/null)
+  mv "$tmpfile" "$file"
+  tmpfile=""
+  vlog "$file: normalized to A4"
+done
+
+exit "$exit_status"
