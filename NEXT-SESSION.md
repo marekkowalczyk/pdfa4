@@ -1,8 +1,18 @@
 # Next Session
 
-## Backlog (GitHub Issues)
+## Completed last session
 
-Deferred from the 2026-11-08 feature interview — details live in the issues, not here.
+- [x] ~~v1.0.0 / v1.1.0 tagged and released; MIT LICENSE; CHANGELOG; topics~~
+- [x] ~~`/Rotate` awareness + real-cpdf integration tests~~
+- [x] ~~Deferred features + pdfcpu research filed as Issues #1–#7~~
+
+## Immediate
+
+- Nothing blocking. Pick a backlog issue when ready (see below), or leave stable.
+
+## Follow-ups / backlog
+
+Details are in the issues — do not re-derive from chat.
 
 | # | Topic |
 |---|--------|
@@ -14,10 +24,14 @@ Deferred from the 2026-11-08 feature interview — details live in the issues, n
 | [#6](https://github.com/marekkowalczyk/pdfa4/issues/6) | Report-only / audit mode |
 | [#7](https://github.com/marekkowalczyk/pdfa4/issues/7) | Spike: replace cpdf with Go **pdfcpu** |
 
-## Done recently
+## Current state
 
-- `/Rotate` awareness + real-cpdf integration tests (`v1.1.0`)
+- Tool on PATH as `pdfa4`; bats suite includes unit + real-cpdf integration (integration skips if `cpdf` missing).
+- Latest GitHub Release is the current line.
 
 ## Process notes
 
-- Suite wiring: `TOOLS` in `pdftools/install.sh`, tools table + deps in `pdftools/README.md`.
+- **Release order:** commit LICENSE/CHANGELOG/README first; confirm they are in `HEAD`; then tag and `gh release create`.
+- Backlog body lives in GitHub Issues; this file only links.
+- Suite wiring for new tools: `pdftools` `install.sh` TOOLS + README table + deps (see pdftools `CONVENTIONS.md`).
+- Prefer awk for `cpdf -page-info` parsing; verify `/Rotate` against cpdf page-range semantics before relying on `portrait`/`landscape`.

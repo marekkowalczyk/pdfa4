@@ -36,8 +36,14 @@ Pre-commit hook: `hooks/pre-commit`. Install with `make hooks`.
 - Follows the Rule of Silence. `--dry-run` previews show by default; `-q` overrides everything but errors. Errors are prefixed `pdfa4:`.
 - Same mktemp / chmod / xattr / trap in-place pattern as `pdfstamp` / `pdfrem`.
 
+## Releases
+
+Before tagging: commit `LICENSE`, `CHANGELOG.md`, and README links; confirm with `git ls-tree HEAD --name-only` that they are present; then annotate-tag and `gh release create`. Do not tag a commit that lacks packaging files.
+
+Deferred work and research live in GitHub Issues (see `NEXT-SESSION.md` for the link table), not as long backlog prose in-repo.
+
 ## Suite
 
-`pdfa4` is part of the [pdftools](https://github.com/marekkowalczyk/pdftools) suite. Cross-tool conventions live in [pdftools/CONVENTIONS.md](https://github.com/marekkowalczyk/pdftools/blob/master/CONVENTIONS.md). **Read it in full before touching any CLI flags or adding features.**
+`pdfa4` is part of the [pdftools](https://github.com/marekkowalczyk/pdftools) suite. Cross-tool conventions live in [pdftools/CONVENTIONS.md](https://github.com/marekkowalczyk/pdftools/blob/master/CONVENTIONS.md). **Read it in full before touching any CLI flags or adding features.** The suite repo itself is a pointer/installer — it is not version-released unless explicitly asked.
 
 When operating on more than one repo, always `cd /absolute/path && git ...` in a single invocation; never rely on shell cwd persisting across tool calls.
