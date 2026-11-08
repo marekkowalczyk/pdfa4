@@ -75,6 +75,10 @@ make test    # run the bats suite
 
 Unit tests use a mock `cpdf` binary. `tests/pdfa4-integration.bats` runs against a real `cpdf` and is skipped when it is missing.
 
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
-MIT
+[MIT](LICENSE)
